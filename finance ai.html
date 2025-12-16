@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinanceAI 智慧理財管理系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
+    <div id="app"></div>
+
+    <script>
+        // 全域狀態
+        let expenses = [];
+        let activeView = 'menu';
+        let chartInstance = null;
+
+        // 自動分類功能
+        function autoCategory(item) {
+            const itemLower = item.toLowerCase();
+            const mapping = {
+                food: ["food", "meal", "drink", "飲料", "餐", "吃"],
+                transport: ["bus", "train", "uber", "transport", "車", "捷運"],
+                entertainment: ["game", "movie", "fun", "娛樂"],
+                study: ["book", "study", "補習", "學習"]
+            };
+            
+            for (const [category, keywords] of Object.entries(mapping)) {
+                if (keywords.some(k => itemLower.includes(k))) {
+                    return category;
+                }
+            }
+            return "others";
+        }
+
+        // 格式化數字
+        function formatNumber(num) {
+            if (!num) return 'N/A';
+            if (num >= 1e12) return `$${(num / 1e12).toFixed(2)}T`;
+            if (num >= 1e9) return `$${(num / 1e9).toFixed(2)}B`;
+            if (num >= 1e6) return `$${(num / 1e6).toFixed(2)}M`;
+            return `$${num.toFixed(2)}`;
+        }
+
+        // 渲染主選單
+        function renderMenu() {
+            const menuItems = [
+                { icon: '➕', label: '新增記帳', view: 'add', color: 'bg-blue-500' },
+                { icon: '📊', label: '查看收支分析', view: 'chart', color: 'bg-green-500' },
+                { icon: '🎯', label: '設定目標 + 投資', view: 'goal', color: 'bg-purple-500' },
+                { icon: '💡', label: '專業理財建議', view: 'advice', color: 'bg-yellow-500' }
+            ];
+
+            const menuHTML = `
+                <div class="max-w-4xl mx-auto">
+                    <div class="text-center mb-8">
+                        <h1 class="text-4xl font-bold text-gray-800 mb-2">FinanceAI</h1>
+                        <p class="text-gray-600">智慧理財管理系統</p>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        ${menuItems.map(item => `
+                            <button onclick="changeView('${item.view}')" 
+                                class="${item.color} text-white p-6 rounded-lg shadow-lg hover:opacity-90 transition-all transform hover:scale-105">
+                                <div class="text-5xl mb-3">${item.icon}</div>
+                                <p class="text-xl font-semibold">${item.label}</p>
+                            </button>
+                        `).join('')}
+                    </div>
+                    
+                    ${expenses.length > 0 ? `
+                        <div class="mt-6 p-4 bg-white rounded-lg shadow">
+                            <p class="text-center text-gray-700">
+                                📊 目前共有 <span class="font-bold">${expenses.length}</span> 筆記帳資料
+                            </p>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+            document.getElementById('app').innerHTML = menuHTML;
+        }
+
+        // 渲染新增記帳頁面
+        function renderAddExpense() {
+            const html = `
+                <div class="bg-white rounded-lg shadow-lg p-6 max-w-md mx-auto">
+                    <h2 class="text-2xl font-bold mb-4 text-gray-800">新增記帳</h2>
+                    <form id="expenseForm">
+                        <input type="text" id="item" placeholder="項目名稱" required
+                            class="w-full p-3 border rounded mb-3">
+                        <input type="number" id="amount" placeholder="金額" required
+                            class="w-full p-3 border rounded mb-3" step="0.01">
+                        
+                        <div class="mb-4">
+                            <label class="flex items-center mb-2">
+                                <input type="checkbox" id="autoMode" checked class="mr-2">
+                                <span>自動分類</span>
+                            </label>
+                            
+                            <select id="category" class="w-full p-3 border rounded" style="display: none;">
+                                <option value="">選擇分類</option>
+                                <option value="food">Food</option>
+                                <option value="transport">Transport</option>
+                                <option value="entertainment">Entertainment</option>
+                                <option value="study">Study</option>
+                                <option value="others">Others</option>
+                            </select>
+                        </div>
+                        
+                        <button type="submit" 
+                            class="w-full bg-blue-500 text-white p-3 rounded hover:bg-blue-600 mb-2">
+                            新增
+                        </button>
+                        <button type="button" onclick="changeView('menu')"
+                            class="w-full bg-gray-300 text-gray-700 p-3 rounded hover:bg-gray-400">
+                            返回
+                        </button>
+                    </form>
+                </div>
+            `;
+            document.getElementById('app').innerHTML = html;
+
+            // 事件監聽
+            document.getElementById('autoMode').addEventListener('change', function(e) {
+                document.getElementById('category').style.display = e.target.checked ? 'none' : 'block';
+            });
+
+            document.getElementById('expenseForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                const item = document.getElementById('item').value;
+                const amount = parseFloat(document.getElementById('amount').value);
+                const autoMode = document.getElementById('autoMode').checked;
+                const category = autoMode ? autoCategory(item) : document.getElementById('category').value;
+                
+                expenses.push({ item, amount, category });
+                alert('✔ 已新增！');
+                changeView('menu');
+            });
+        }
+
+        // 渲染收支分析頁面
+        function renderChart() {
+            const html = `
+                <div class="bg-white rounded-lg shadow-lg p-6 max-w-3xl mx-auto">
+                    <h2 class="text-2xl font-bold mb-4 text-gray-800">收支分析</h2>
+                    ${expenses.length > 0 ? 
+                        '<canvas id="expenseChart" width="400" height="400"></canvas>' : 
+                        '<p class="text-center text-gray-500">目前沒有資料</p>'
+                    }
+                    <button onclick="changeView('menu')"
+                        class="w-full mt-4 bg-gray-300 text-gray-700 p-3 rounded hover:bg-gray-400">
+                        返回
+                    </button>
+                </div>
+            `;
+            document.getElementById('app').innerHTML = html;
+
+            if (expenses.length > 0) {
+                const categoryData = {};
+                expenses.forEach(exp => {
+                    categoryData[exp.category] = (categoryData[exp.category] || 0) + exp.amount;
+                });
+
+                const labels = Object.keys(categoryData);
+                const data = Object.values(categoryData);
+                const colors = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8'];
+
+                const ctx = document.getElementById('expenseChart').getContext('2d');
+                if (chartInstance) chartInstance.destroy();
+                
+                chartInstance = new Chart(ctx, {
+                    type: 'pie',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: data,
+                            backgroundColor: colors
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        // 渲染目標設定頁面
+        function renderGoal() {
+            const html = `
+                <div class="bg-white rounded-lg shadow-lg p-6 max-w-2xl mx-auto">
+                    <h2 class="text-2xl font-bold mb-4 text-gray-800">設定目標 + 投資</h2>
+                    
+                    <div class="mb-6 flex gap-2">
+                        <button id="tabGoal" onclick="switchTab('goal')" 
+                            class="flex-1 p-2 rounded bg-green-500 text-white">
+                            目標計算
+                        </button>
+                        <button id="tabStock" onclick="switchTab('stock')" 
+                            class="flex-1 p-2 rounded bg-gray-200">
+                            個股查詢
+                        </button>
+                    </div>
+
+                    <div id="goalContent">
+                        <input type="text" id="goalName" placeholder="目標名稱 (例：出國、買電腦)"
+                            class="w-full p-3 border rounded mb-3">
+                        <input type="number" id="goalMoney" placeholder="目標金額"
+                            class="w-full p-3 border rounded mb-3">
+                        <input type="number" id="monthlySave" placeholder="每月可儲蓄"
+                            class="w-full p-3 border rounded mb-3">
+                        
+                        <label class="flex items-center mb-3">
+                            <input type="checkbox" id="useInvestment" class="mr-2">
+                            <span>加入投資收益</span>
+                        </label>
+                        
+                        <div id="investmentRate" style="display: none;">
+                            <input type="number" id="rate" placeholder="預期年化報酬率 (%)"
+                                class="w-full p-3 border rounded mb-3" step="0.1">
+                        </div>
+                        
+                        <button onclick="calculateGoal()"
+                            class="w-full bg-green-500 text-white p-3 rounded hover:bg-green-600 mb-3">
+                            計算
+                        </button>
+                        
+                        <div id="goalResult"></div>
+                    </div>
+
+                    <div id="stockContent" style="display: none;">
+                        <div class="mb-2 text-sm text-gray-600">
+                            提示：美股輸入代號（如 AAPL、TSLA），台股加 .TW（如 2330.TW）
+                        </div>
+                        <input type="text" id="stockSymbol" placeholder="輸入股票代號 (例：AAPL、TSLA、2330.TW)"
+                            class="w-full p-3 border rounded mb-3">
+                        <button onclick="searchStock()"
+                            class="w-full bg-blue-500 text-white p-3 rounded hover:bg-blue-600 mb-3">
+                            🔍 查詢個股資訊
+                        </button>
+                        <div id="stockResult"></div>
+                    </div>
+
+                    <button onclick="changeView('menu')"
+                        class="w-full mt-4 bg-gray-300 text-gray-700 p-3 rounded hover:bg-gray-400">
+                        返回
+                    </button>
+                </div>
+            `;
+            document.getElementById('app').innerHTML = html;
+
+            // 事件監聽
+            document.getElementById('useInvestment').addEventListener('change', function(e) {
+                document.getElementById('investmentRate').style.display = e.target.checked ? 'block' : 'none';
+            });
+
+            document.getElementById('stockSymbol').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') searchStock();
+            });
+        }
+
+        // 切換目標/股票分頁
+        function switchTab(tab) {
+            if (tab === 'goal') {
+                document.getElementById('tabGoal').className = 'flex-1 p-2 rounded bg-green-500 text-white';
+                document.getElementById('tabStock').className = 'flex-1 p-2 rounded bg-gray-200';
+                document.getElementById('goalContent').style.display = 'block';
+                document.getElementById('stockContent').style.display = 'none';
+            } else {
+                document.getElementById('tabGoal').className = 'flex-1 p-2 rounded bg-gray-200';
+                document.getElementById('tabStock').className = 'flex-1 p-2 rounded bg-blue-500 text-white';
+                document.getElementById('goalContent').style.display = 'none';
+                document.getElementById('stockContent').style.display = 'block';
+            }
+        }
+
+        // 計算目標
+        function calculateGoal() {
+            const goalName = document.getElementById('goalName').value;
+            const goalMoney = parseFloat(document.getElementById('goalMoney').value);
+            const monthlySave = parseFloat(document.getElementById('monthlySave').value);
+            const useInvestment = document.getElementById('useInvestment').checked;
+            
+            let months;
+            if (useInvestment) {
+                const rate = parseFloat(document.getElementById('rate').value) / 100;
+                months = Math.log(1 + (goalMoney * rate) / (12 * monthlySave)) / Math.log(1 + rate / 12);
+            } else {
+                months = goalMoney / monthlySave;
+            }
+            
+            document.getElementById('goalResult').innerHTML = `
+                <div class="p-4 bg-blue-50 rounded">
+                    <p class="text-lg font-semibold text-blue-800">
+                        📌 達成「${goalName}」需要大約：${months.toFixed(1)} 個月
+                    </p>
+                </div>
+            `;
+        }
+
+        // 查詢股票
+        async function searchStock() {
+            const symbol = document.getElementById('stockSymbol').value.toUpperCase().trim();
+            if (!symbol) {
+                alert('請輸入股票代號');
+                return;
+            }
+
+            const resultDiv = document.getElementById('stockResult');
+            resultDiv.innerHTML = '<p class="text-center">查詢中...</p>';
+
+            try {
+                const corsProxy = 'https://api.allorigins.win/raw?url=';
+                const apiUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1y`;
+                
+                const response = await fetch(corsProxy + encodeURIComponent(apiUrl));
+                if (!response.ok) throw new Error('無法取得股票資料');
+                
+                const data = await response.json();
+                if (data.chart.error) throw new Error('查無此股票代號');
+                
+                const quote = data.chart.result[0];
+                const meta = quote.meta;
+                const indicators = quote.indicators.quote[0];
+                const closes = indicators.close;
+                
+                const high52w = Math.max(...indicators.high.filter(v => v !== null));
+                const low52w = Math.min(...indicators.low.filter(v => v !== null));
+                
+                const currentPrice = meta.regularMarketPrice;
+                const oneMonthAgo = closes[Math.max(0, closes.length - 22)] || closes[0];
+                const monthlyChange = ((currentPrice - oneMonthAgo) / oneMonthAgo * 100).toFixed(2);
+                
+                const summaryUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=defaultKeyStatistics,summaryDetail`;
+                const summaryResponse = await fetch(corsProxy + encodeURIComponent(summaryUrl));
+                const summaryData = await summaryResponse.json();
+                
+                const keyStats = summaryData?.quoteSummary?.result?.[0]?.defaultKeyStatistics || {};
+                const summaryDetail = summaryData?.quoteSummary?.result?.[0]?.summaryDetail || {};
+                
+                const stockInfo = {
+                    name: meta.longName || meta.shortName || symbol,
+                    symbol: symbol,
+                    price: currentPrice,
+                    currency: meta.currency,
+                    high52w: high52w,
+                    low52w: low52w,
+                    marketCap: meta.marketCap || summaryDetail.marketCap?.raw,
+                    pe: keyStats.trailingPE?.raw || summaryDetail.trailingPE?.raw,
+                    dividend: keyStats.dividendYield?.raw ? (keyStats.dividendYield.raw * 100).toFixed(2) : null,
+                    monthlyChange: monthlyChange,
+                    exchange: meta.exchangeName
+                };
+
+                const changeColor = parseFloat(stockInfo.monthlyChange) >= 0 ? 'text-green-600' : 'text-red-600';
+                
+                resultDiv.innerHTML = `
+                    <div class="p-4 bg-gray-50 rounded border border-gray-200">
+                        <h3 class="font-bold text-xl mb-4 text-gray-800">
+                            📊 ${stockInfo.name} (${stockInfo.symbol})
+                        </h3>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between py-2 border-b">
+                                <span class="font-semibold">目前股價：</span>
+                                <span class="text-lg font-bold text-blue-600">
+                                    ${stockInfo.currency} ${stockInfo.price.toFixed(2)}
+                                </span>
+                            </div>
+                            <div class="flex justify-between py-2 border-b">
+                                <span class="font-semibold">52 週最高價：</span>
+                                <span>${stockInfo.currency} ${stockInfo.high52w.toFixed(2)}</span>
+                            </div>
+                            <div class="flex justify-between py-2 border-b">
+                                <span class="font-semibold">52 週最低價：</span>
+                                <span>${stockInfo.currency} ${stockInfo.low52w.toFixed(2)}</span>
+                            </div>
+                            <div class="flex justify-between py-2 border-b">
+                                <span class="font-semibold">市值：</span>
+                                <span>${formatNumber(stockInfo.marketCap)}</span>
+                            </div>
+                            <div class="flex justify-between py-2 border-b">
+                                <span class="font-semibold">本益比 (P/E)：</span>
+                                <span>${stockInfo.pe ? stockInfo.pe.toFixed(2) : 'N/A'}</span>
+                            </div>
+                            <div class="flex justify-between py-2 border-b">
+                                <span class="font-semibold">股息殖利率：</span>
+                                <span>${stockInfo.dividend ? `${stockInfo.dividend}%` : 'N/A'}</span>
+                            </div>
+                            <div class="flex justify-between py-2">
+                                <span class="font-semibold">近 1 個月漲跌：</span>
+                                <span class="font-bold ${changeColor}">
+                                    ${stockInfo.monthlyChange}%
+                                </span>
+                            </div>
+                            <div class="mt-3 text-xs text-gray-500 text-center">
+                                交易所：${stockInfo.exchange} | 數據來源：Yahoo Finance
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="p-4 bg-red-50 rounded border border-red-200">
+                        <p class="text-red-600">查詢失敗：${error.message}。請確認股票代號是否正確。</p>
+                    </div>
+                `;
+            }
+        }
+
+        // 渲染理財建議頁面
+        function renderAdvice() {
+            const total = expenses.reduce((sum, exp) => sum + exp.amount, 0);
+            const categoryTotals = {};
+            expenses.forEach(exp => {
+                categoryTotals[exp.category] = (categoryTotals[exp.category] || 0) + exp.amount;
+            });
+
+            const maxCategory = Object.keys(categoryTotals).reduce((a, b) => 
+                categoryTotals[a] > categoryTotals[b] ? a : b, 'food'
+            );
+            const foodRatio = (categoryTotals[maxCategory] || 0) / total;
+            const score = Math.round((1 - foodRatio) * 100);
+
+            const html = `
+                <div class="bg-white rounded-lg shadow-lg p-6 max-w-2xl mx-auto">
+                    <h2 class="text-2xl font-bold mb-4 text-gray-800">🤖 AI 理財建議（專業版）</h2>
+                    
+                    ${expenses.length === 0 ? 
+                        '<p class="text-gray-500">沒有資料無法分析</p>' :
+                        `<div class="space-y-4">
+                            <div class="p-4 bg-yellow-50 rounded">
+                                <p class="font-semibold">📌 財務壓力分數：${score}/100</p>
+                            </div>
+                            
+                            ${foodRatio > 0.45 ? `
+                                <div class="p-4 bg-red-50 rounded">
+                                    <p class="font-semibold">📌 你的食物支出遠高於大學生平均（40%）</p>
+                                </div>
+                            ` : ''}
+                            
+                            <div class="p-4 bg-blue-50 rounded">
+                                <p class="font-semibold">📌 建議投資組合：</p>
+                                <p class="text-sm mt-1">ETF 60% + 高股息 20% + 債券 20%</p>
+                            </div>
+                            
+                            <div class="p-4 bg-green-50 rounded">
+                                <p class="font-semibold">📌 建議將每月儲蓄率提升至 15%</p>
+                            </div>
+                            
+                            <div class="p-4 bg-purple-50 rounded">
+                                <p class="font-semibold">📌 行動建議：</p>
+                                <p class="text-sm mt-1">本月減少外食 10%，可提升儲蓄率 4%</p>
+                            </div>
+                        </div>`
+                    }
+                    
+                    <button onclick="changeView('menu')"
+                        class="w-full mt-4 bg-gray-300 text-gray-700 p-3 rounded hover:bg-gray-400">
+                        返回
+                    </button>
+                </div>
+            `;
+            document.getElementById('app').innerHTML = html;
+        }
+
+        // 切換頁面
+        function changeView(view) {
+            activeView = view;
+            switch(view) {
+                case 'menu':
+                    renderMenu();
+                    break;
+                case 'add':
+                    renderAddExpense();
+                    break;
+                case 'chart':
+                    renderChart();
+                    break;
+                case 'goal':
+                    renderGoal();
+                    break;
+                case 'advice':
+                    renderAdvice();
+                    break;
+            }
+        }
+
+        // 初始化
+        renderMenu();
+    </script>
+</body>
+</html>
